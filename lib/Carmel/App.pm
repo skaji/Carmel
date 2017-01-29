@@ -91,7 +91,7 @@ sub cmd_version {
 
 sub cmd_inject {
     my($self, @args) = @_;
-    $self->install("--reinstall", @args);
+    $self->install(@args);
 }
 
 sub cmd_update {
@@ -178,15 +178,14 @@ sub install_with_cpanfile {
     my @options = ("--cpanfile", $path);
 
     if ($snapshot) {
-        my $path = Path::Tiny->tempfile;
-        $snapshot->write_index($path);
-        push @options,
-          "--mirror-index", $path,
-          "--cascade-search",
-          "--mirror", "http://cpan.metacpan.org";
+        push @options, (
+            "--snapshot", $snapshot->path,
+            "--resolver", "snapshot",
+            "--resolver", "metadb",
+        );
     }
 
-    $self->install("--installdeps", @options, ".");
+    $self->install(@options);
 }
 
 sub install {
@@ -196,34 +195,30 @@ sub install {
     $file_temp{CLEANUP} = $ENV{PERL_FILE_TEMP_CLEANUP}
       if exists $ENV{PERL_FILE_TEMP_CLEANUP};
 
-    my $dir = Path::Tiny->tempdir(%file_temp);
-    local $ENV{PERL_CPANM_HOME} = $dir;
-    local $ENV{PERL_CPANM_OPT};
-
     my $cpanfile = $self->try_cpanfile
       or die "Can't locate 'cpanfile' to load module list.\n";
 
     # one mirror for now
     my $mirror = Module::CPANfile->load($cpanfile)->mirrors->[0];
 
-    require Menlo::CLI::Compat;
+    require App::cpm;
 
-    my $cli = Menlo::CLI::Compat->new(
-        ($self->verbose ? () : "--quiet"),
-        ($mirror ? ("-M", $mirror) : ()),
-        "--notest",
-        "--save-dists", $self->repository_base->child('cache'),
+    my $cli = App::cpm->new(_return_artifacts => 1);
+    my ($ok, $artifacts) = $cli->run(
+        "install",
+        ($self->verbose ? "--verbose" : ()),
         "-L", $self->repository_base->child('perl5'),
         @args,
     );
-    $cli->run;
 
-    for my $ent ($dir->child("latest-build")->children) {
-        next unless $ent->is_dir && $ent->child("blib/meta/install.json")->exists;
-        $self->repo->import_artifact($ent);
+    for my $artifact (map { Path::Tiny->new($_) } values %$artifacts) {
+        next unless $artifact->is_dir && $artifact->child("blib/meta/install.json")->exists;
+        $self->repo->import_artifact($artifact);
     }
 
     $self->repository_base->child('perl5')->remove_tree({ safe => 0 });
+
+    exit 1 unless $ok;
 }
 
 sub quote {
@@ -449,7 +444,9 @@ sub cmd_package {
 
     my $index = $self->build_index;
 
-    my $source_base = $self->repository_base->child('cache');
+
+    my $home = $ENV{HOME} || $ENV{HOMEPATH};
+    my $source_base = Path::Tiny->new($home, ".perl-cpm", 'cache');
     my $target_base = Path::Tiny->new('vendor/cache');
 
     my %done;

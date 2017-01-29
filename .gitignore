@@ -11,3 +11,5 @@ MYMETA.*
 /vendor/cache
 /bin/
 cpanfile.snapshot
+/Makefile
+/pm_to_blib
